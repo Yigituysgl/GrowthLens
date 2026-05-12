@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Database (auto-generated — no need to push)
+*.db
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS
+.DS_Store
+Thumbs.db
