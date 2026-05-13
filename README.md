@@ -4,6 +4,7 @@
 
 Built to demonstrate real-world data science skills: SQL analytics, machine learning, statistical testing, and interactive dashboards — all connected through a single synthetic travel marketplace dataset.
 
+📊 **[GitHub](https://github.com/Yigituysgl/GrowthLens)** · Built with Python · SQL · Streamlit
 
 ---
 
@@ -19,25 +20,57 @@ GrowthLens answers all three in one platform.
 
 ---
 
+## Dashboard Screenshots
+
+### 📊 Executive Summary
+![Executive Summary](screenshots/Executive_summary1.png)
+![Revenue by Market](screenshots/Executive_summary2.png)
+
+### 👥 CRM & Retention
+![CRM Segments](screenshots/CRM_retention.png)
+![Churn Model](screenshots/Churn-Model2.png)
+![Campaign Simulator](screenshots/CRM_retention_CampaignSimulator0.png)
+
+### 🧪 A/B Testing
+![A/B Test Significant](screenshots/A-BTesting3.png)
+![A/B Test Not Significant](screenshots/A-BTesting7.png)
+
+### 💰 Pricing & Revenue
+![Pricing Revenue](screenshots/Pricing_Revenue.png)
+![Price Elasticity](screenshots/Price+elasticity.png)
+![Channel ROI](screenshots/ROI.png)
+
+---
+
 ## What's Inside
 
-###  CRM & Retention
+### 👥 CRM & Retention
 - **RFM segmentation** of 50,000 customers using SQL window functions (`NTILE`, `JULIANDAY`, CTEs)
 - **Churn prediction** with Random Forest — identifies customers most likely to stop booking
 - **Interactive campaign simulator** — drag sliders to model win-back email ROI in real time
 - Segments: VIP · Loyal · Needs Attention · At Risk · Lost
 
-###  A/B Testing
-- **Z-test engine** built from scratch using `scipy.stats` — no black-box libraries
+### 🧪 A/B Testing
+- **Z-test engine** built from scratch using `scipy.stats`
 - Tests two live experiments: urgency banner vs discount email campaign
-- Outputs: Z-score, p-value, lift %, CPA comparison, and plain-English business recommendation
-- Correctly identifies one experiment as **significant** and one as **not significant** — showing the difference between real signal and noise
+- Outputs: Z-score, p-value, lift %, CPA comparison, plain-English business recommendation
+- Correctly identifies one experiment as **significant** and one as **not significant**
 
-###  Pricing & Revenue
+### 💰 Pricing & Revenue
 - **Price elasticity modeling** from month-over-month booking and price data
-- **Discount optimizer** — simulates revenue at every discount level (0–50%) to find the optimal point
-- Revenue breakdown by market (Berlin, Paris, London, Amsterdam, Rome, Barcelona, Prague, Vienna) and category
+- **Discount optimizer** — simulates revenue at every discount level (0–50%)
+- Revenue breakdown by market and category
 - Channel ROI comparison: Paid Search vs CRM Email vs Organic
+
+---
+
+## Key Findings
+
+- **19,030 VIP customers** (38% of base) generate **64.7% of total revenue** — but last booked 159 days ago → churn risk
+- **Discount email**: Z=4.91, p<0.001 → significant, +51% lift — but CPA rises €4.63→€6.68 (deploy selectively)
+- **Urgency banner**: Z=1.738, p=0.082 → not significant — do not ship, run longer
+- **Price elasticity = 0.34** → customers are inelastic; deep discounting hurts revenue
+- **6,541 customers** signed up but never booked → onboarding failure, not churn
 
 ---
 
@@ -46,12 +79,12 @@ GrowthLens answers all three in one platform.
 | Layer | Tools |
 |-------|-------|
 | Database | SQLite · DBeaver |
-| SQL | CTEs · Window functions · JULIANDAY · NULLIF · COALESCE |
+| SQL | CTEs · Window functions · NTILE · JULIANDAY · COALESCE |
 | Python | pandas · numpy · scikit-learn · scipy · plotly |
 | Dashboard | Streamlit |
-| ML | Random Forest (churn) · Price elasticity regression |
+| ML | Random Forest (churn) · Price elasticity model |
 | Stats | Z-test for proportions · AUC evaluation |
-| DevOps | Git · GitHub · Streamlit Cloud |
+| DevOps | Git · GitHub |
 
 ---
 
@@ -68,58 +101,37 @@ GrowthLens/
 │   ├── ab_testing.py             # Z-test engine for A/B experiments
 │   └── pricing_opt.py            # Elasticity model + discount optimizer
 │
-└── sql/
-    ├── rfm_segmentation.sql      # CTE chain: base → scores → segments
-    ├── ab_testing.sql            # Experiment aggregation by variant
-    ├── pricing_analysis.sql      # Revenue by month/market/category
-    └── marketing_roi.sql         # Channel spend vs revenue
+├── sql/
+│   ├── rfm_segmentation.sql      # CTE chain: base → scores → segments
+│   ├── ab_testing.sql            # Experiment aggregation by variant
+│   ├── pricing_analysis.sql      # Revenue by month/market/category
+│   └── marketing_roi.sql         # Channel spend vs revenue
+│
+└── screenshots/                  # Dashboard screenshots
 ```
 
 ---
 
 ## The Data
 
-Fully synthetic dataset generated with `data_generator.py` — designed to reflect realistic travel marketplace patterns:
-
 | Table | Rows | Description |
 |-------|------|-------------|
 | `customers` | 50,000 | Demographics, market, segment, email opt-in |
-| `bookings` | 95,754 | Booking history across 8 markets, 10 categories, 3 channels |
+| `bookings` | 95,754 | History across 8 markets, 10 categories, 3 channels |
 | `experiments` | 18,000 | Two A/B tests with built-in conversion signals |
 | `marketing_spend` | 576 | Monthly spend by market and channel |
-
-**Why synthetic?** Full control over the business story — real-world signals (one significant experiment, one not; VIPs going quiet; elasticity below 1) are baked in intentionally.
-
----
-
-## Key Findings
-
-- **19,030 VIP customers** (38% of base) generate **64.7% of total revenue** — but their average recency is 159 days, signalling churn risk
-- **Discount email campaign**: Z-score 4.91, p < 0.001 → statistically significant, 51% lift in conversions — but CPA increases from €4.63 to €6.68 (deploy selectively)
-- **Urgency banner**: Z-score 1.738, p = 0.082 → not significant — do not ship, run longer
-- **Price elasticity = 0.34** → customers are inelastic; deep discounting hurts revenue
-- **6,541 customers** signed up but never booked → onboarding failure, not churn
 
 ---
 
 ## Run Locally
 
 ```bash
-# Clone the repo
 git clone https://github.com/Yigituysgl/GrowthLens.git
 cd GrowthLens
-
-# Create virtual environment
 python -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
-
-# Install dependencies
 pip install -r requirements.txt
-
-# Generate the database
 python modules/data_generator.py
-
-# Launch the dashboard
 streamlit run app.py
 ```
 
@@ -130,8 +142,6 @@ streamlit run app.py
 Built by **Yigit Uysaloglu** — Data Scientist based in Berlin.
 
 MSc in Data Analytics · Berlin School of Business and Innovation · 2026
-
-Skills demonstrated: SQL analytics · Machine learning · Statistical testing · Python · Streamlit · Business storytelling
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Yigit_Uysaloglu-blue)](https://linkedin.com/in/yigit-uysaloglu)
 [![GitHub](https://img.shields.io/badge/GitHub-Yigituysgl-black)](https://github.com/Yigituysgl)
