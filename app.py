@@ -7,6 +7,12 @@ import sys, os
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "modules"))
 
+DB_PATH = os.path.join(os.path.dirname(__file__), "data", "growthens.db")
+if not os.path.exists(DB_PATH):
+    os.makedirs(os.path.join(os.path.dirname(__file__), "data"), exist_ok=True)
+    from data_generator import generate_all
+    generate_all()
+
 from crm_retention import (load_rfm_data, get_segment_summary,
                             train_churn_model, simulate_campaign_roi,
                             get_market_breakdown)
