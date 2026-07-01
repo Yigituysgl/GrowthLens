@@ -10,7 +10,7 @@ Built to demonstrate real-world data science skills: SQL analytics, machine lear
 
 ## The Business Problem
 
-A travel marketplace (think GetYourGuide, Airbnb Experiences) needs to answer three questions every week:
+A travel marketplace  needs to answer three questions every week:
 
 1. **Who are our customers and which ones are at risk of leaving?** → CRM & Retention
 2. **Did our last marketing experiment actually work?** → A/B Testing
