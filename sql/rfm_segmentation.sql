@@ -1,12 +1,3 @@
-SELECT 'customers'      AS table_name, COUNT(*) AS rows FROM customers
-UNION ALL
-SELECT 'bookings',       COUNT(*) FROM bookings
-UNION ALL
-SELECT 'experiments',    COUNT(*) FROM experiments
-UNION ALL
-SELECT 'marketing_spend',COUNT(*) FROM marketing_spend;
-
-
 WITH base_metrics AS (
     SELECT
         c.customer_id,
