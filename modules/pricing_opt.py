@@ -121,14 +121,23 @@ def get_channel_roi(mkt_roi):
     summary = mkt_roi.groupby('channel').agg(
         total_spend   = ('total_marketing_spend','sum'),
         total_revenue = ('total_revenue',        'sum'),
-        avg_roi_pct   = ('roi_pct',              'mean'),
     ).reset_index()
+
+    # ROI from channel totals; averaging market ROIs would weight a small
+    # market the same as a large one.
+    spend = summary['total_spend'].where(summary['total_spend'] > 0)
+    summary['roi_pct'] = ((summary['total_revenue'] - spend) / spend * 100).round(1)
 
     summary['total_spend']   = summary['total_spend'].round(2)
     summary['total_revenue'] = summary['total_revenue'].round(2)
-    summary['avg_roi_pct']   = summary['avg_roi_pct'].round(1)
 
-    return summary.sort_values('avg_roi_pct', ascending=False)
+    # A channel without spend has no ROI, so it goes last rather than first.
+    return summary.sort_values('roi_pct', ascending=False, na_position='last')
+
+
+
+def format_roi(roi_pct):
+    return "n/a (no spend)" if pd.isna(roi_pct) else f"{roi_pct:,.1f}%"
 
 
 

@@ -20,7 +20,7 @@ from ab_testing   import (load_experiment_data, run_ztest, explain,
                           sample_size_per_group)
 from pricing_opt  import (load_data, get_revenue_summary,
                            estimate_elasticity, optimize_discount,
-                           get_channel_roi)
+                           get_channel_roi, format_roi)
 
 # ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
@@ -582,4 +582,5 @@ elif page == "Pricing & Revenue":
             paper_bgcolor='rgba(0,0,0,0)',
         )
         st.plotly_chart(fig, use_container_width=True)
-        st.dataframe(ch_roi, use_container_width=True, hide_index=True)
+        roi_table = ch_roi.assign(roi_pct=ch_roi['roi_pct'].map(format_roi))
+        st.dataframe(roi_table, use_container_width=True, hide_index=True)

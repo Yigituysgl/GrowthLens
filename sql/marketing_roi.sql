@@ -1,17 +1,38 @@
+-- Spend and revenue are each summed to one row per market and channel
+-- before joining; joining the raw rows would repeat every booking once
+-- per spend month and every spend month once per booking.
+WITH spend AS (
+    SELECT
+        market,
+        channel,
+        SUM(spend_eur) AS total_marketing_spend
+    FROM marketing_spend
+    GROUP BY market, channel
+),
+
+revenue AS (
+    SELECT
+        market,
+        channel,
+        COUNT(*)       AS total_bookings,
+        SUM(spend_eur) AS total_revenue
+    FROM bookings
+    GROUP BY market, channel
+)
 
 SELECT
-    ms.market,
-    ms.channel,
-    ROUND(SUM(ms.spend_eur), 2)         AS total_marketing_spend,
-    COUNT(b.booking_date)               AS total_bookings,
-    ROUND(SUM(b.spend_eur), 2)          AS total_revenue,
+    s.market,
+    s.channel,
+    ROUND(s.total_marketing_spend, 2)       AS total_marketing_spend,
+    COALESCE(r.total_bookings, 0)           AS total_bookings,
+    ROUND(COALESCE(r.total_revenue, 0), 2)  AS total_revenue,
+    -- NULL when there is no spend: ROI is undefined, not infinitely good.
     ROUND(
-        (SUM(b.spend_eur) - SUM(ms.spend_eur))
-        / NULLIF(SUM(ms.spend_eur), 0) * 100
-    , 1)                                AS roi_pct
-FROM marketing_spend ms
-LEFT JOIN bookings b
-    ON ms.market  = b.market
-    AND ms.channel = b.channel
-GROUP BY ms.market, ms.channel
+        (COALESCE(r.total_revenue, 0) - s.total_marketing_spend)
+        / NULLIF(s.total_marketing_spend, 0) * 100
+    , 1)                                    AS roi_pct
+FROM spend s
+LEFT JOIN revenue r
+    ON  s.market  = r.market
+    AND s.channel = r.channel
 ORDER BY roi_pct DESC
