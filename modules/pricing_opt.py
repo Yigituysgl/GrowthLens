@@ -22,76 +22,88 @@ def load_data():
 
 
 
-def estimate_elasticity(bookings):
-    
-    df = bookings.groupby(['month', 'market', 'category']).agg(
-        bookings  = ('total_bookings', 'sum'),
-        avg_price = ('avg_price_eur',  'mean'),
-    ).reset_index()
+ELASTICITY_NOTE = (
+    "In this synthetic data, the number of bookings does not depend on price, "
+    "so price elasticity cannot be estimated from it. Elasticity is therefore "
+    "an assumption you set."
+)
 
-    df = df.sort_values(['market', 'category', 'month'])
+PRICE_TEST_NOTE = (
+    "Real elasticity must be measured with a price A/B test: show different "
+    "prices to randomly chosen groups and compare bookings."
+)
 
-    
-    df['price_chg']   = df.groupby(['market','category'])['avg_price'].pct_change()
-    df['booking_chg'] = df.groupby(['market','category'])['bookings'].pct_change()
 
-    
-    df = df.replace([np.inf, -np.inf], np.nan).dropna()
-
-    
-    df = df[df['price_chg'].abs() > 0.005]
-    df['elasticity'] = df['booking_chg'] / df['price_chg']
-
-    
-    low, high = df['elasticity'].quantile([0.05, 0.95])
-    df = df[(df['elasticity'] >= low) & (df['elasticity'] <= high)]
-
-    avg_elasticity = df['elasticity'].mean()
-
-    
-    by_category = df.groupby('category')['elasticity'].mean().round(3)
-
-    return round(avg_elasticity, 3), by_category
+def get_base_values(bookings):
+    # Weighted by bookings; averaging the per-group average prices would give
+    # small groups the same weight as large ones.
+    base_price = bookings['total_revenue_eur'].sum() / bookings['total_bookings'].sum()
+    base_monthly_bookings = bookings['total_bookings'].sum() / bookings['month'].nunique()
+    return base_price, base_monthly_bookings
 
 
 
-def optimize_discount(bookings, elasticity,
-                      base_price=None, base_bookings=None):
+def optimize_discount(base_price, base_bookings, elasticity, margin):
+    # elasticity = % more bookings per 1% price cut, entered as a positive number.
+    if elasticity < 0:
+        raise ValueError("elasticity must be >= 0 (bookings rise when price falls)")
 
-    
-    if base_price is None:
-        base_price    = bookings['avg_price_eur'].mean()
-    if base_bookings is None:
-        base_bookings = bookings['total_bookings'].mean()
+    discount = np.round(np.arange(0, 0.51, 0.01), 2)     # 0% to 50% in 1% steps
+    # Straight-line demand response; only a fair approximation for modest discounts.
+    bookings_at = base_bookings * (1 + elasticity * discount)
+    revenue     = bookings_at * base_price * (1 - discount)
+    # Cost per booking is fixed at price x (1 - margin), so the discount comes
+    # straight out of the margin.
+    profit      = bookings_at * base_price * (margin - discount)
 
-    results = []
-    for discount in np.arange(0, 0.51, 0.01):   # 0% to 50% in 1% steps
-        disc_price   = base_price * (1 - discount)
+    curve = pd.DataFrame({
+        'discount_pct'  : discount * 100,
+        'disc_price_eur': base_price * (1 - discount),
+        'bookings'      : bookings_at,
+        'revenue_eur'   : revenue,
+        'profit_eur'    : profit,
+    })
+    curve['revenue_change_eur'] = curve['revenue_eur'] - curve['revenue_eur'].iloc[0]
+    curve['profit_change_eur']  = curve['profit_eur']  - curve['profit_eur'].iloc[0]
 
-        # Volume uplift from lower price (elasticity is negative normally)
-        # I use abs() because our elasticity can be positive in synthetic data
-        volume_mult  = 1 + abs(elasticity) * discount
-        new_bookings = base_bookings * volume_mult
-        new_revenue  = new_bookings * disc_price
-        base_revenue = base_bookings * base_price
-        revenue_gain = new_revenue - base_revenue
+    # idxmax returns the first maximum, so ties resolve to the smaller discount.
+    best_revenue = curve.loc[curve['revenue_eur'].idxmax()]
+    best_profit  = curve.loc[curve['profit_eur'].idxmax()]
+    return curve, best_revenue, best_profit
 
-        results.append({
-            'discount_pct'   : round(discount * 100, 0),
-            'disc_price_eur' : round(disc_price, 2),
-            'new_bookings'   : round(new_bookings, 1),
-            'new_revenue_eur': round(new_revenue, 2),
-            'base_revenue_eur': round(base_revenue, 2),
-            'revenue_gain_eur': round(revenue_gain, 2),
-        })
 
-    df_results = pd.DataFrame(results)
 
-    
-    best_idx      = df_results['new_revenue_eur'].idxmax()
-    optimal       = df_results.iloc[best_idx]
+def format_eur_change(x):
+    return f"{'-' if x < 0 else '+'}€{abs(x):,.0f}"
 
-    return df_results, optimal
+
+
+def explain_discount(elasticity, margin, best_revenue, best_profit):
+    lines = []
+    if elasticity <= 1:
+        lines.append(
+            f"Each 1% off the price brings only {elasticity:.1f}% more bookings, so the extra "
+            f"volume never makes up for the lower price. That is why 0% maximises revenue."
+        )
+    else:
+        lines.append(
+            f"Each 1% off the price brings {elasticity:.1f}% more bookings, so a discount "
+            f"can grow revenue; it peaks at {best_revenue['discount_pct']:.0f}%."
+        )
+    if elasticity * margin <= 1:
+        lines.append(
+            f"Profit is stricter: with a {margin*100:.0f}% margin, each 1% off the price "
+            f"removes {1/margin:.1f}% of the profit on every booking, so bookings must rise "
+            f"by more than {1/margin:.1f}% per 1% cut to pay for it. At elasticity "
+            f"{elasticity:.1f} they do not, so 0% maximises profit."
+        )
+    else:
+        lines.append(
+            f"With a {margin*100:.0f}% margin the extra volume outweighs the thinner margin; "
+            f"profit peaks at a discount of {best_profit['discount_pct']:.0f}% "
+            f"({format_eur_change(best_profit['profit_change_eur'])} vs no discount)."
+        )
+    return lines
 
 
 
@@ -157,18 +169,21 @@ def main():
     print("\n[3] Revenue by category (top 5):")
     print(by_category.head(5).to_string(index=False))
 
-    print("\n[4] Estimating price elasticity...")
-    elasticity, by_cat = estimate_elasticity(bookings)
-    print(f"    Average elasticity: {elasticity}")
-    print(f"    Interpretation: 1% price drop → "
-          f"{abs(elasticity):.1f}% booking increase")
+    print("\n[4] Price elasticity:")
+    print(f"    {ELASTICITY_NOTE}")
 
-    print("\n[5] Optimizing discount level...")
-    disc_curve, optimal = optimize_discount(bookings, elasticity)
-    print(f"    Base avg price     : €{bookings['avg_price_eur'].mean():.2f}")
-    print(f"    Optimal discount   : {optimal['discount_pct']:.0f}%")
-    print(f"    Discounted price   : €{optimal['disc_price_eur']}")
-    print(f"    Revenue gain       : €{optimal['revenue_gain_eur']:,.2f}")
+    elasticity, margin = 1.0, 0.20
+    print(f"\n[5] Discount optimizer (assumed elasticity {elasticity}, margin {margin:.0%}):")
+    base_price, base_bookings = get_base_values(bookings)
+    curve, best_rev, best_profit = optimize_discount(base_price, base_bookings,
+                                                     elasticity, margin)
+    print(f"    Base price (data)          : €{base_price:.2f}")
+    print(f"    Base monthly bookings (data): {base_bookings:,.0f}")
+    print(f"    Revenue-optimal discount   : {best_rev['discount_pct']:.0f}%")
+    print(f"    Profit-optimal discount    : {best_profit['discount_pct']:.0f}%")
+    for line in explain_discount(elasticity, margin, best_rev, best_profit):
+        print(f"    - {line}")
+    print(f"    {PRICE_TEST_NOTE}")
 
     print("\n[6] Channel ROI:")
     ch_roi = get_channel_roi(mkt_roi)
@@ -177,7 +192,7 @@ def main():
     print("\n" + "=" * 55)
     
 
-    return bookings, mkt_roi, elasticity, disc_curve, optimal
+    return bookings, mkt_roi, curve, best_rev, best_profit
 
 
 if __name__ == "__main__":

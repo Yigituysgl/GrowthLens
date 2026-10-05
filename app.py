@@ -19,8 +19,10 @@ from crm_retention import (load_rfm_data, get_segment_summary,
 from ab_testing   import (load_experiment_data, run_ztest, explain,
                           sample_size_per_group)
 from pricing_opt  import (load_data, get_revenue_summary,
-                           estimate_elasticity, optimize_discount,
-                           get_channel_roi, format_roi)
+                           get_base_values, optimize_discount,
+                           explain_discount, format_eur_change,
+                           get_channel_roi, format_roi,
+                           ELASTICITY_NOTE, PRICE_TEST_NOTE)
 
 # ── Page config ──────────────────────────────────────────────────
 st.set_page_config(
@@ -54,15 +56,13 @@ def load_all():
     exp_raw          = load_experiment_data()
     bookings, mkt    = load_data()
     by_market, by_cat= get_revenue_summary(bookings)
-    elasticity, _    = estimate_elasticity(bookings)
-    disc_curve, opt  = optimize_discount(bookings, elasticity)
     ch_roi           = get_channel_roi(mkt)
     ab_results       = [run_ztest(exp_raw, e)
                         for e in exp_raw['experiment'].unique()]
     return (rfm_scored, segment_summary, churn_metrics, importance, churn_holdout,
             exp_raw, ab_results,
             bookings, by_market, by_cat,
-            elasticity, disc_curve, opt, ch_roi)
+            ch_roi)
 
 # ── Sidebar navigation ───────────────────────────────────────────
 st.sidebar.image("https://img.icons8.com/fluency/96/telescope.png", width=64)
@@ -86,7 +86,7 @@ with st.spinner("Loading GrowthLens data..."):
     (rfm, seg_summary, churn_metrics, importance, churn_holdout,
      exp_raw, ab_results,
      bookings, by_market, by_cat,
-     elasticity, disc_curve, opt, ch_roi) = load_all()
+     ch_roi) = load_all()
 
 
 # ════════════════════════════════════════════════════════════════
@@ -477,7 +477,7 @@ elif page == "A/B Testing":
 # ════════════════════════════════════════════════════════════════
 elif page == "Pricing & Revenue":
     st.title("💰 Pricing & Revenue")
-    st.caption("Elasticity modelling · Discount optimisation · Channel ROI")
+    st.caption("Revenue breakdown · Discount scenarios (assumed elasticity) · Channel ROI")
     st.divider()
 
     tab1, tab2, tab3 = st.tabs(
@@ -518,51 +518,57 @@ elif page == "Pricing & Revenue":
 
     with tab2:
         st.subheader("Discount optimisation curve")
-        st.metric("Price elasticity", f"{elasticity:.3f}",
-                  "1% price drop → "
-                  f"{abs(elasticity):.1f}% booking uplift")
+        st.info(ELASTICITY_NOTE)
 
-        base_price = st.slider(
-            "Base price (€)", 30, 250,
-            int(bookings['avg_price_eur'].mean())
-        )
-        base_vol   = st.slider(
-            "Base monthly bookings", 500, 10000,
-            int(bookings['total_bookings'].mean() * 10)
+        st.markdown("**Assumptions** — not measured in the data, set them yourself")
+        a1, a2 = st.columns(2)
+        elasticity = a1.slider("Assumption: price elasticity", 0.0, 5.0, 1.0, step=0.1,
+                               help="% more bookings for every 1% price cut")
+        margin     = a2.slider("Assumption: profit margin %", 5, 60, 20) / 100
+
+        data_price, data_vol = get_base_values(bookings)
+        b1, b2 = st.columns(2)
+        base_price = b1.slider("Base price (€) — data average", 30, 250,
+                               int(round(data_price)))
+        base_vol   = b2.slider("Base monthly bookings — data average", 500, 10000,
+                               int(round(data_vol)))
+
+        curve, best_rev, best_profit = optimize_discount(
+            base_price, base_vol, elasticity, margin
         )
 
-        disc_curve_live, opt_live = optimize_discount(
-            bookings, elasticity, base_price, base_vol
-        )
+        k1, k2, k3 = st.columns(3)
+        k1.metric("Revenue-optimal discount", f"{best_rev['discount_pct']:.0f}%")
+        k2.metric("Profit-optimal discount",  f"{best_profit['discount_pct']:.0f}%")
+        k3.metric("Monthly profit change at that discount",
+                  format_eur_change(best_profit["profit_change_eur"]))
 
         fig = go.Figure()
         fig.add_trace(go.Scatter(
-            x=disc_curve_live['discount_pct'],
-            y=disc_curve_live['new_revenue_eur'],
-            mode='lines', name='Revenue with discount',
+            x=curve['discount_pct'], y=curve['revenue_change_eur'],
+            mode='lines', name='Revenue change',
             line=dict(color=GREEN, width=2.5),
-            fill='tozeroy', fillcolor='rgba(29,158,117,0.08)',
         ))
         fig.add_trace(go.Scatter(
-            x=disc_curve_live['discount_pct'],
-            y=disc_curve_live['base_revenue_eur'],
-            mode='lines', name='Base revenue',
-            line=dict(color=AMBER, width=1.5, dash='dash'),
+            x=curve['discount_pct'], y=curve['profit_change_eur'],
+            mode='lines', name='Profit change',
+            line=dict(color=PURPLE, width=2.5),
         ))
-        fig.add_vline(
-            x=opt_live['discount_pct'],
-            line_dash="dot", line_color=PURPLE,
-            annotation_text=f"Optimal: {opt_live['discount_pct']:.0f}%",
-        )
+        fig.add_hline(y=0, line_color=AMBER, line_dash='dash',
+                      annotation_text="No discount")
         fig.update_layout(
             height=380,
             xaxis_title="Discount %",
-            yaxis_title="Revenue (€)",
+            yaxis_title="Monthly change vs no discount (€)",
             plot_bgcolor='rgba(0,0,0,0)',
             paper_bgcolor='rgba(0,0,0,0)',
             legend=dict(orientation='h', y=1.1),
         )
         st.plotly_chart(fig, use_container_width=True)
+
+        st.markdown("**Why this discount?**\n" + "\n".join(
+            f"- {l}" for l in explain_discount(elasticity, margin, best_rev, best_profit)))
+        st.warning(PRICE_TEST_NOTE)
 
     with tab3:
         st.subheader("Channel performance")
