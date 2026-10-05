@@ -12,32 +12,51 @@ WITH base_metrics AS (
     GROUP BY c.customer_id, c.market, c.segment
 ),
 
+-- Only customers with at least one booking are ranked, so the large
+-- never-booked group does not fill the bottom quartiles.
+-- CUME_DIST gives tied values the same rank; NTILE would split ties arbitrarily.
+ranked AS (
+    SELECT
+        customer_id, frequency,
+        CUME_DIST() OVER (ORDER BY days_since_last DESC) AS r_pct,
+        CUME_DIST() OVER (ORDER BY monetary ASC)         AS m_pct
+    FROM base_metrics
+    WHERE frequency > 0
+),
+
 rfm_scores AS (
     SELECT
-        customer_id, market, segment,
-        days_since_last, frequency, monetary,
-        5 - NTILE(4) OVER (ORDER BY days_since_last DESC) AS r_score,
-        NTILE(4) OVER (ORDER BY frequency ASC)            AS f_score,
-        NTILE(4) OVER (ORDER BY monetary ASC)             AS m_score
-    FROM base_metrics
+        customer_id,
+        -- The most recent bookers sit at the top of the distribution and get 4.
+        CASE WHEN r_pct <= 0.25 THEN 1 WHEN r_pct <= 0.50 THEN 2
+             WHEN r_pct <= 0.75 THEN 3 ELSE 4 END AS r_score,
+        -- Booking counts are mostly 1, so quartiles cannot separate them;
+        -- fixed count bands keep every score reachable and meaningful.
+        CASE WHEN frequency = 1 THEN 1 WHEN frequency = 2 THEN 2
+             WHEN frequency <= 4 THEN 3 ELSE 4 END AS f_score,
+        CASE WHEN m_pct <= 0.25 THEN 1 WHEN m_pct <= 0.50 THEN 2
+             WHEN m_pct <= 0.75 THEN 3 ELSE 4 END AS m_score
+    FROM ranked
 )
 
 SELECT
-    customer_id,
-    market,
-    segment,
-    COALESCE(days_since_last, 999)  AS recency_days,
-    COALESCE(frequency, 0)          AS total_bookings,
-    COALESCE(monetary, 0)           AS total_spend_eur,
-    r_score, f_score, m_score,
-    (r_score + f_score + m_score)   AS rfm_score,
+    b.customer_id,
+    b.market,
+    b.segment,
+    COALESCE(b.days_since_last, 999)  AS recency_days,
+    b.frequency                       AS total_bookings,
+    COALESCE(b.monetary, 0)           AS total_spend_eur,
+    s.r_score, s.f_score, s.m_score,
+    (s.r_score + s.f_score + s.m_score) AS rfm_score,
     CASE
-        WHEN r_score >= 3 AND f_score >= 3 AND m_score >= 3 THEN 'VIP'
-        WHEN r_score >= 3 AND f_score >= 2                   THEN 'Loyal'
-        WHEN r_score >= 3 AND f_score <  2                   THEN 'New Customer'
-        WHEN r_score <  2 AND f_score >= 3                   THEN 'At Risk'
-        WHEN r_score <  2 AND f_score <  2                   THEN 'Lost'
+        WHEN b.frequency = 0                                       THEN 'Never booked'
+        WHEN s.r_score >= 3 AND s.f_score >= 3 AND s.m_score >= 3 THEN 'VIP'
+        WHEN s.r_score >= 3 AND s.f_score >= 2                     THEN 'Loyal'
+        WHEN s.r_score >= 3 AND s.f_score <  2                     THEN 'Recent one-time buyer'
+        WHEN s.r_score <  2 AND s.f_score >= 3                     THEN 'At Risk'
+        WHEN s.r_score <  2 AND s.f_score <  2                     THEN 'Lost'
         ELSE 'Needs Attention'
     END AS rfm_segment
-FROM rfm_scores
+FROM base_metrics b
+LEFT JOIN rfm_scores s ON b.customer_id = s.customer_id
 ORDER BY rfm_score DESC;

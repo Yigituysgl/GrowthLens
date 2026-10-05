@@ -40,7 +40,8 @@ SEG_COLOURS = {
     "Needs Attention" : AMBER,
     "Lost"            : RED,
     "At Risk"         : "#E07A5F",
-    "New Customer"    : PURPLE,
+    "Recent one-time buyer" : PURPLE,
+    "Never booked"    : "#9AA0A6",
 }
 
 # ── Cache heavy computations ─────────────────────────────────────
