@@ -49,7 +49,7 @@ SEG_COLOURS = {
 def load_all():
     rfm              = load_rfm_data()
     segment_summary  = get_segment_summary(rfm)
-    rfm_scored, auc, importance = train_churn_model(rfm)
+    rfm_scored, churn_metrics, importance = train_churn_model(rfm)
     exp_raw          = load_experiment_data()
     bookings, mkt    = load_data()
     by_market, by_cat= get_revenue_summary(bookings)
@@ -58,7 +58,7 @@ def load_all():
     ch_roi           = get_channel_roi(mkt)
     ab_results       = [run_ztest(exp_raw, e)
                         for e in exp_raw['experiment'].unique()]
-    return (rfm_scored, segment_summary, auc, importance,
+    return (rfm_scored, segment_summary, churn_metrics, importance,
             exp_raw, ab_results,
             bookings, by_market, by_cat,
             elasticity, disc_curve, opt, ch_roi)
@@ -82,7 +82,7 @@ st.sidebar.caption("Yigit Uysaloglu · 2025")
 
 # ── Load data ────────────────────────────────────────────────────
 with st.spinner("Loading GrowthLens data..."):
-    (rfm, seg_summary, auc, importance,
+    (rfm, seg_summary, churn_metrics, importance,
      exp_raw, ab_results,
      bookings, by_market, by_cat,
      elasticity, disc_curve, opt, ch_roi) = load_all()
@@ -219,8 +219,21 @@ elif page == "CRM & Retention":
     with tab2:
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Model AUC", f"{auc:.3f}",
-                      "1.0 = perfect · 0.5 = random")
+            st.caption(
+                f"Trained on bookings before {churn_metrics['cutoff']}; churn = no booking "
+                f"in the next {churn_metrics['horizon_days']} days. Scores below use the "
+                f"full history up to 2024-12-31."
+            )
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Model AUC", f"{churn_metrics['model_auc']:.3f}",
+                      "1.0 = perfect · 0.5 = random", delta_color="off")
+            m2.metric("Baseline AUC", f"{churn_metrics['baseline_auc']:.3f}",
+                      "recency only", delta_color="off")
+            m3.metric("Churners in top 10%",
+                      f"{churn_metrics['model_top10_hits']:,} / {churn_metrics['top10_size']:,}",
+                      f"baseline {churn_metrics['baseline_top10_hits']:,} · "
+                      f"random ≈ {churn_metrics['random_top10_hits']:.0f}",
+                      delta_color="off")
             st.subheader("Feature importance")
             fig = px.bar(
                 importance, x="importance", y="feature",

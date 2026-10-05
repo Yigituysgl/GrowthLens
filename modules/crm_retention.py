@@ -9,6 +9,17 @@ from sklearn.metrics import roc_auc_score
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "growthens.db")
 SQL_PATH = os.path.join(os.path.dirname(__file__), "..", "sql", "rfm_segmentation.sql")
+CHURN_SQL_PATH = os.path.join(os.path.dirname(__file__), "..", "sql", "churn_features.sql")
+
+# Bookings run to 2024-12-31; this cutoff leaves a full 180-day window to observe churn.
+TRAIN_CUTOFF       = "2024-07-01"
+CHURN_HORIZON_DAYS = 180
+# Day after the last booking, so current risk scores use the full history.
+SCORING_DATE       = "2025-01-01"
+
+# customers.segment is left out: it is the generator's hidden booking-rate group.
+MODEL_FEATURES = ['recency_days', 'frequency', 'total_spend_eur',
+                  'tenure_days', 'market_encoded']
 
 
 def get_connection():
@@ -43,32 +54,39 @@ def get_segment_summary(df):
 
 
 
-def train_churn_model(df):
-    # Create churn label
-    df = df.copy()
-    df['churned'] = (
-        (df['recency_days'] > 180) &
-        (df['total_bookings'] >= 2)
-    ).astype(int)
+def load_churn_dataset(conn, cutoff, horizon_days=CHURN_HORIZON_DAYS):
+    label_end = (pd.Timestamp(cutoff) + pd.Timedelta(days=horizon_days)).date().isoformat()
+    with open(CHURN_SQL_PATH) as f:
+        sql = f.read()
+    return pd.read_sql(sql, conn, params={'cutoff': cutoff, 'label_end': label_end})
 
-    
-    le = LabelEncoder()
-    df['market_encoded'] = le.fit_transform(df['market'])
 
-    
-    features = ['r_score', 'f_score', 'm_score',
-                'total_bookings', 'total_spend_eur',
-                'recency_days', 'market_encoded']
 
-    X = df[features]
-    y = df['churned']
+def top_decile_capture(y_true, score):
+    # Stable sort keeps tie-breaking reproducible between runs.
+    k = max(1, int(round(len(score) * 0.10)))
+    top = np.argsort(-np.asarray(score, dtype=float), kind='stable')[:k]
+    return int(np.asarray(y_true)[top].sum()), k
 
-    
+
+
+def train_churn_model(rfm_df):
+    conn = get_connection()
+    train_set = load_churn_dataset(conn, TRAIN_CUTOFF)
+    # Labels at the scoring date are meaningless (no future data); only features are used.
+    current   = load_churn_dataset(conn, SCORING_DATE)
+    conn.close()
+
+    le = LabelEncoder().fit(train_set['market'])
+    train_set['market_encoded'] = le.transform(train_set['market'])
+    current['market_encoded']   = le.transform(current['market'])
+
+    X = train_set[MODEL_FEATURES]
+    y = train_set['churned']
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, random_state=42
     )
 
-    
     model = RandomForestClassifier(
         n_estimators=100,
         max_depth=6,
@@ -76,22 +94,39 @@ def train_churn_model(df):
         n_jobs=-1        # use all CPU cores
     )
     model.fit(X_train, y_train)
-
-    
     y_prob = model.predict_proba(X_test)[:, 1]
-    auc = roc_auc_score(y_test, y_prob)
 
-    
-    df['churn_probability'] = model.predict_proba(X[features])[:, 1]
-    df['churn_probability'] = df['churn_probability'].round(3)
+    # Baseline: longer since the last booking means higher risk, no training needed.
+    baseline_score = X_test['recency_days']
 
-    
+    model_hits, k    = top_decile_capture(y_test, y_prob)
+    baseline_hits, _ = top_decile_capture(y_test, baseline_score)
+
+    metrics = {
+        'cutoff'            : TRAIN_CUTOFF,
+        'horizon_days'      : CHURN_HORIZON_DAYS,
+        'n_customers'       : len(train_set),
+        'churn_rate'        : float(y.mean()),
+        'n_test'            : len(y_test),
+        'test_churners'     : int(y_test.sum()),
+        'model_auc'         : roc_auc_score(y_test, y_prob),
+        'baseline_auc'      : roc_auc_score(y_test, baseline_score),
+        'top10_size'        : k,
+        'model_top10_hits'  : model_hits,
+        'baseline_top10_hits': baseline_hits,
+        'random_top10_hits' : k * float(y_test.mean()),
+    }
+
+    current['churn_probability'] = model.predict_proba(current[MODEL_FEATURES])[:, 1].round(3)
+    df = rfm_df.merge(current[['customer_id', 'churn_probability']],
+                      on='customer_id', how='left')
+
     importance = pd.DataFrame({
-        'feature'   : features,
+        'feature'   : MODEL_FEATURES,
         'importance': model.feature_importances_.round(3)
     }).sort_values('importance', ascending=False)
 
-    return df, auc, importance
+    return df, metrics, importance
 
 
 
@@ -150,8 +185,15 @@ def run_all():
     print(summary.to_string(index=False))
 
     print("\n[3] Training churn model...")
-    df, auc, importance = train_churn_model(df)
-    print(f"    Model AUC: {auc:.3f}  (1.0 = perfect, 0.5 = random)")
+    df, m, importance = train_churn_model(df)
+    print(f"    Cutoff {m['cutoff']}, churn = no booking in next {m['horizon_days']} days")
+    print(f"    Customers: {m['n_customers']:,}  churn rate: {m['churn_rate']*100:.1f}%  "
+          f"test set: {m['n_test']:,} ({m['test_churners']:,} churners)")
+    print(f"    Model AUC    : {m['model_auc']:.3f}  (1.0 = perfect, 0.5 = random)")
+    print(f"    Baseline AUC : {m['baseline_auc']:.3f}  (recency only)")
+    print(f"    Churners in top 10% ({m['top10_size']:,} customers): "
+          f"model {m['model_top10_hits']:,} · baseline {m['baseline_top10_hits']:,} · "
+          f"random ≈ {m['random_top10_hits']:.0f}")
     print("\n    Feature importance:")
     print(importance.to_string(index=False))
 
@@ -168,7 +210,7 @@ def run_all():
 
     print("\n" + "=" * 50)
     print("Done! crm_retention.py is ready.")
-    return df, summary, auc, importance, roi
+    return df, summary, m, importance, roi
 
 
 if __name__ == "__main__":
