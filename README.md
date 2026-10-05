@@ -224,9 +224,9 @@ GrowthLens/
 
 ## About
 
-Built by **Yigit Uysaloglu** — Data Scientist based in Berlin.
+Built by **Yigit Uysaloglu** — Data Analyst based in Berlin.
 
-MSc in Data Analytics · Berlin School of Business and Innovation · 2026
+MSc in Data Analytics · Berlin School of Business and Innovation · 2025
 
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-Yigit_Uysaloglu-blue)](https://linkedin.com/in/yigit-uysaloglu)
 [![GitHub](https://img.shields.io/badge/GitHub-Yigituysgl-black)](https://github.com/Yigituysgl)
