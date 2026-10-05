@@ -16,7 +16,8 @@ if not os.path.exists(DB_PATH):
 from crm_retention import (load_rfm_data, get_segment_summary,
                             train_churn_model, simulate_campaign_roi,
                             get_market_breakdown)
-from ab_testing   import load_experiment_data, run_ztest
+from ab_testing   import (load_experiment_data, run_ztest, explain,
+                          sample_size_per_group)
 from pricing_opt  import (load_data, get_revenue_summary,
                            estimate_elasticity, optimize_discount,
                            get_channel_roi)
@@ -366,8 +367,38 @@ elif page == "A/B Testing":
                         "threshold ±1.96")
             col2.metric("P-value",    f"{r['p_value']}",
                         "threshold 0.05")
-            col3.metric("Lift",       f"{r['lift_pct']:+.1f}%")
+            col3.metric("Lift",       f"{r['lift_pct']:+.1f}%",
+                        f"95% CI {r['lift_low_pct']:+.1f}% to {r['lift_high_pct']:+.1f}%",
+                        delta_color="off")
             col4.metric("Significant",sig_label)
+
+            col5, col6, col7, col8 = st.columns(4)
+            col5.metric("Difference", f"{r['diff_pp']:+.2f} pp",
+                        f"95% CI {r['diff_low_pp']:+.2f} to {r['diff_high_pp']:+.2f} pp",
+                        delta_color="off")
+            col6.metric("Sample ratio",
+                        "OK" if r['srm_ok'] else "MISMATCH",
+                        f"{r['control_share']*100:.1f}% control · p = {r['srm_p_value']:.2f}",
+                        delta_color="off")
+            if 'power_at_true_effect' in r:
+                col7.metric("Power (planted effect)",
+                            f"{r['power_at_true_effect']*100:.0f}%",
+                            f"{r['n_control']:,} / {r['n_test']:,} users", delta_color="off")
+                col8.metric("Needed for 80% power", f"{r['n_needed_80']:,} / group",
+                            f"90%: {r['n_needed_90']:,} / group", delta_color="off")
+
+            if 'true_lift_pct' in r:
+                truth_text = (
+                    f"**Planted truth (synthetic data):** {r['true_rate_control_pct']:.1f}% → "
+                    f"{r['true_rate_test_pct']:.1f}% ({r['true_lift_pct']:+.1f}%). "
+                    f"Measured {r['lift_pct']:+.1f}%; the 95% CI "
+                    f"{'contains' if r['ci_contains_truth'] else 'does not contain'} the truth."
+                )
+                if r['missed_real_effect']:
+                    st.error(truth_text + " **This test missed a real effect because it "
+                             "was underpowered.**")
+                else:
+                    st.success(truth_text + " The verdict matches the truth.")
 
             c1, c2 = st.columns(2)
             with c1:
@@ -416,6 +447,29 @@ elif page == "A/B Testing":
 
             st.info(f"**Verdict:** {r['verdict']}")
             st.success(f"**Recommendation:** {r['recommendation']}")
+            st.markdown("**In plain words**\n" + "\n".join(f"- {l}" for l in explain(r)))
+
+    st.divider()
+    st.subheader("Sample size calculator")
+    st.caption("How many users each group needs before the test starts. "
+               "Two-sided test at a 5% significance level.")
+    s1, s2, s3 = st.columns(3)
+    base_rate = s1.number_input("Baseline conversion rate (%)", 0.1, 90.0, 2.0,
+                                step=0.1) / 100
+    mde       = s2.number_input("Minimum detectable effect (relative lift %)",
+                                1.0, 200.0, 20.0, step=1.0) / 100
+    power     = s3.radio("Power", ["80%", "90%"], horizontal=True)
+    target_rate = base_rate * (1 + mde)
+    if target_rate >= 1:
+        st.warning("Baseline × (1 + effect) must stay below 100%.")
+    else:
+        n_needed = sample_size_per_group(base_rate, target_rate,
+                                         0.80 if power == "80%" else 0.90)
+        r1, r2 = st.columns(2)
+        r1.metric("Users per group", f"{n_needed:,}")
+        r2.metric("Users in total", f"{2 * n_needed:,}")
+        st.caption(f"Detects {base_rate*100:.2f}% → {target_rate*100:.2f}% "
+                   f"({target_rate*100 - base_rate*100:+.2f} pp) with {power} power.")
 
 
 # ════════════════════════════════════════════════════════════════

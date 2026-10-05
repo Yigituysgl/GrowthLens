@@ -26,6 +26,13 @@ CHANNELS = ["Paid Search", "CRM Email", "Organic"]
 
 SEGMENTS = ["VIP", "Regular", "New", "At Risk"]
 
+# True conversion rates planted in the A/B data. ab_testing.py reads these
+# to check its estimates against the known answer.
+PLANTED_CONVERSION = {
+    "urgency_banner": {"control": 0.018, "test": 0.026},
+    "discount_email": {"control": 0.05,  "test": 0.08},
+}
+
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "growthens.db")
 
 
@@ -132,9 +139,9 @@ def generate_experiments(customers):
     exp_a_customers["variant"]     = np.where(
         np.random.rand(len(exp_a_customers)) < 0.5, "control", "test"
     )
-    # Control: 1.8% conversion | Test: 2.6% conversion (real signal)
+    rates_a = PLANTED_CONVERSION["urgency_banner"]
     exp_a_customers["converted"] = exp_a_customers["variant"].apply(
-        lambda v: int(np.random.rand() < (0.026 if v == "test" else 0.018))
+        lambda v: int(np.random.rand() < rates_a[v])
     )
     exp_a_customers["ad_spend_eur"] = exp_a_customers["variant"].apply(
         lambda v: round(np.random.uniform(1.2, 2.8) if v == "test"
@@ -150,9 +157,9 @@ def generate_experiments(customers):
     exp_b_customers["variant"]     = np.where(
         np.random.rand(len(exp_b_customers)) < 0.5, "control", "test"
     )
-    # Control: 12% open → 5% book | Test: 22% open → 8% book
+    rates_b = PLANTED_CONVERSION["discount_email"]
     exp_b_customers["converted"] = exp_b_customers["variant"].apply(
-        lambda v: int(np.random.rand() < (0.08 if v == "test" else 0.05))
+        lambda v: int(np.random.rand() < rates_b[v])
     )
     exp_b_customers["ad_spend_eur"] = exp_b_customers["variant"].apply(
         lambda v: round(np.random.uniform(0.3, 0.8) if v == "test"
