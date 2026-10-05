@@ -49,7 +49,7 @@ SEG_COLOURS = {
 def load_all():
     rfm              = load_rfm_data()
     segment_summary  = get_segment_summary(rfm)
-    rfm_scored, churn_metrics, importance = train_churn_model(rfm)
+    rfm_scored, churn_metrics, importance, churn_holdout = train_churn_model(rfm)
     exp_raw          = load_experiment_data()
     bookings, mkt    = load_data()
     by_market, by_cat= get_revenue_summary(bookings)
@@ -58,7 +58,7 @@ def load_all():
     ch_roi           = get_channel_roi(mkt)
     ab_results       = [run_ztest(exp_raw, e)
                         for e in exp_raw['experiment'].unique()]
-    return (rfm_scored, segment_summary, churn_metrics, importance,
+    return (rfm_scored, segment_summary, churn_metrics, importance, churn_holdout,
             exp_raw, ab_results,
             bookings, by_market, by_cat,
             elasticity, disc_curve, opt, ch_roi)
@@ -82,7 +82,7 @@ st.sidebar.caption("Yigit Uysaloglu · 2025")
 
 # ── Load data ────────────────────────────────────────────────────
 with st.spinner("Loading GrowthLens data..."):
-    (rfm, seg_summary, churn_metrics, importance,
+    (rfm, seg_summary, churn_metrics, importance, churn_holdout,
      exp_raw, ab_results,
      bookings, by_market, by_cat,
      elasticity, disc_curve, opt, ch_roi) = load_all()
@@ -274,37 +274,74 @@ elif page == "CRM & Retention":
     # ── Tab 3: Campaign Simulator ─────────────────────────────────
     with tab3:
         st.subheader("Win-back campaign simulator")
-        st.caption("Adjust the sliders to model different campaign scenarios")
+        st.caption("Targets opted-in customers with the highest churn score. "
+                   "Only re-bookings caused by the campaign are counted.")
 
-        c1, c2, c3 = st.columns(3)
-        open_rate   = c1.slider("Email open rate %",   5,  40, 20) / 100
-        rebook_rate = c2.slider("Re-booking rate %",   1,  25,  8) / 100
-        avg_val     = c3.slider("Avg booking value €", 30, 300, 85)
-        cost_email  = st.slider("Cost per email (€)",
-                                0.01, 0.50, 0.05, step=0.01)
+        target_pct = st.slider("Target top % of opted-in customers by churn score",
+                               5, 100, 20) / 100
 
-        roi = simulate_campaign_roi(rfm, open_rate, rebook_rate,
-                                    avg_val, cost_email)
+        st.markdown("**Assumptions** — not measured in the data, set them yourself")
+        a1, a2, a3, a4 = st.columns(4)
+        uplift     = a1.slider("Assumption: campaign uplift (pp)", 0.0, 10.0, 2.0,
+                               step=0.5,
+                               help="Extra share of targeted customers who re-book "
+                                    "because of the email") / 100
+        margin     = a2.slider("Assumption: profit margin %", 5, 60, 20) / 100
+        cost_email = a3.slider("Assumption: cost per email (€)",
+                               0.01, 0.50, 0.05, step=0.01)
+        discount   = a4.slider("Assumption: discount per booking %", 0, 30, 0,
+                               help="Given to every targeted customer who books, "
+                                    "including those who would have booked anyway") / 100
 
-        m1,m2,m3,m4,m5 = st.columns(5)
-        m1.metric("Targeted",         f"{roi['n_targeted']:,}")
-        m2.metric("Re-bookings",      f"{roi['re_bookings']:,}")
-        m3.metric("Revenue recovered",f"€{roi['revenue_recovered']:,.0f}")
-        m4.metric("Net gain",         f"€{roi['net_gain']:,.0f}")
-        m5.metric("ROI",              f"{roi['roi_pct']:.0f}%")
+        roi = simulate_campaign_roi(rfm, churn_holdout, target_pct, uplift,
+                                    margin, cost_email, discount)
 
-        # Funnel chart
-        funnel = pd.DataFrame({
-            "Stage": ["Targeted","Opened","Re-booked"],
-            "Count": [roi['n_targeted'],
-                      roi['emails_opened'],
-                      roi['re_bookings']],
+        st.caption(
+            f"From the data: {roi['n_eligible']:,} opted-in customers have a churn score · "
+            f"avg booking value of targeted customers €{roi['avg_booking_value']:,.2f} · "
+            f"{roi['baseline_rate']*100:.1f}% of similar customers re-booked within "
+            f"{churn_metrics['horizon_days']} days with no campaign"
+        )
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Targeted",          f"{roi['n_targeted']:,}")
+        m2.metric("Would book anyway", f"{roi['would_book_anyway']:,.0f}",
+                  "not credited to campaign", delta_color="off")
+        m3.metric("Extra re-bookings", f"{roi['extra_rebookings']:,.0f}")
+        def eur(x):
+            # Sign before the currency symbol so losses read as -€1,234.
+            return f"-€{abs(x):,.0f}" if x < 0 else f"€{x:,.0f}"
+
+        m4.metric("Extra profit",      eur(roi['extra_profit']),
+                  f"revenue €{roi['extra_revenue']:,.0f}", delta_color="off")
+
+        m5, m6, m7, m8 = st.columns(4)
+        m5.metric("Email cost",        f"€{roi['email_cost']:,.0f}")
+        m6.metric("Discounts to 'would book anyway'",
+                  f"€{roi['anyway_discount_cost']:,.0f}")
+        m7.metric("Net profit",        eur(roi['net_profit']))
+        roi_text = "n/a" if pd.isna(roi['roi_pct']) else f"{roi['roi_pct']:.0f}%"
+        m8.metric("ROI on profit",     roi_text)
+
+        breakdown = pd.DataFrame({
+            "Group": ["Targeted", "Would book anyway", "Extra from campaign"],
+            "Customers": [roi['n_targeted'], roi['would_book_anyway'],
+                          roi['extra_rebookings']],
         })
-        fig = px.funnel(funnel, x="Count", y="Stage",
-                        color_discrete_sequence=[GREEN])
-        fig.update_layout(height=300,
+        fig = px.bar(breakdown, x="Customers", y="Group", orientation='h',
+                     color="Group",
+                     color_discrete_sequence=[BLUE, AMBER, GREEN])
+        fig.update_layout(height=260, showlegend=False,
+                          yaxis={'categoryorder': 'array',
+                                 'categoryarray': breakdown["Group"][::-1].tolist()},
+                          plot_bgcolor='rgba(0,0,0,0)',
                           paper_bgcolor='rgba(0,0,0,0)')
         st.plotly_chart(fig, use_container_width=True)
+
+        st.info("Uplift here is an assumption. The real effect must be measured with "
+                "a holdout group: an A/B test where a random part of the target list "
+                "gets no email, and the difference in re-booking between the two "
+                "groups is the uplift.")
 
 
 # ════════════════════════════════════════════════════════════════
